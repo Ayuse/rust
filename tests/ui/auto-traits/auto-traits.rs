@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(unused_doc_comments)]
 #![feature(auto_traits)]
 #![feature(negative_impls)]
