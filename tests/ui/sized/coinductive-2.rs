@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 struct Node<C: CollectionFactory<Self>> {
     _children: C::Collection,
 }
