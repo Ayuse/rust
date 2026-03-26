@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(unused_variables)]
 
 trait Foo<T> { fn dummy(&self, arg: T) { } } //~ WARN method `dummy` is never used

@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(non_upper_case_globals)]
 
 
