@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 //@ ignore-pass
 //@ ignore-backends: gcc
 #![expect(incomplete_features)]
