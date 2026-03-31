@@ -1,5 +1,5 @@
 //@ edition: 2018
-//@ run-pass
+//@ check-pass
 
 macro_rules! regex {
     //~^ WARN unused macro definition
