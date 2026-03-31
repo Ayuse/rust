@@ -1,4 +1,4 @@
-//@ check-pass
+//@ run-pass
 
 #![allow(unused_imports)]
 // Test that cleanup scope for temporaries created in a match
