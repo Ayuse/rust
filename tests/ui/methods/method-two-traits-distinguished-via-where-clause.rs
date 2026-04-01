@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 // Test that we select between traits A and B. To do that, we must
 // consider the `Sized` bound.
 

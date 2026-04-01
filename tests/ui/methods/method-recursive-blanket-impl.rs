@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 // Test that we don't trigger on the blanket impl for all `&'a T` but
