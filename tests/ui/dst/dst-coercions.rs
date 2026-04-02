@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(unused_variables)]
 // Test coercions involving DST and/or raw pointers
 
