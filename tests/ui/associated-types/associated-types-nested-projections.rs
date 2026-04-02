@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(unused_variables)]
 // Test that we can resolve nested projection types. Issue #20666.
 
