@@ -51,7 +51,15 @@ jobs:
           download-ci-llvm = false
           EOF
 
+      - name: Cache stage1 build
+        id: cache-stage1
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('compiler/**/*.rs', 'library/**/*.rs', 'src/llvm-project') }}
+
       - name: Build instrumented stage1
+        if: steps.cache-stage1.outputs.cache-hit != 'true'
         run: |
           RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
             python3 x.py build library --stage 1 --set build.profiler=true
