@@ -71,11 +71,10 @@ jobs:
         if: steps.cache-stage1.outputs.cache-hit == 'true'
         run: |
           # After cache restore, source files have "now" timestamps (fresh checkout)
-          # which makes them appear newer than cached artifacts, triggering spurious rebuilds.
-          # Touch all cached artifacts so cargo/bootstrap sees them as up-to-date.
-          find build/ -type f \( -name "*.rlib" -o -name "*.rmeta" -o -name "*.d" \
-            -o -name "*.so" -o -name "*.a" -o -name "rustc" -o -name "*.dylib" \) \
-            -exec touch {} + 2>/dev/null || true
+          # making them appear newer than cached artifacts — bootstrap/ninja/cmake
+          # then decide everything needs rebuilding (LLVM included).
+          # Touch all files in build/ so they appear newer than any source file.
+          find build/ -type f -exec touch {} + 2>/dev/null || true
           echo "Timestamps refreshed"
 
       - name: Build instrumented stage1
