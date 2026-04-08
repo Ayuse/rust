@@ -28,8 +28,25 @@ fi
 echo "Platform: $HOST_TRIPLE"
 
 RUSTC="build/$HOST_TRIPLE/stage1/bin/rustc"
-LLVM_PROFDATA="build/$HOST_TRIPLE/ci-llvm/bin/llvm-profdata"
-LLVM_COV="build/$HOST_TRIPLE/ci-llvm/bin/llvm-cov"
+
+# Prefer CI LLVM tools; fall back to system LLVM if not present (e.g. fork CI builds)
+_CI_PROFDATA="build/$HOST_TRIPLE/ci-llvm/bin/llvm-profdata"
+_CI_COV="build/$HOST_TRIPLE/ci-llvm/bin/llvm-cov"
+if [ -x "$_CI_PROFDATA" ]; then
+  LLVM_PROFDATA="$_CI_PROFDATA"
+  LLVM_COV="$_CI_COV"
+else
+  # Find a versioned system llvm-profdata (e.g. llvm-profdata-18)
+  LLVM_PROFDATA=$(command -v llvm-profdata 2>/dev/null || \
+    ls /usr/bin/llvm-profdata-* 2>/dev/null | sort -V | tail -1)
+  LLVM_COV=$(command -v llvm-cov 2>/dev/null || \
+    ls /usr/bin/llvm-cov-* 2>/dev/null | sort -V | tail -1)
+  if [ -z "$LLVM_PROFDATA" ] || [ -z "$LLVM_COV" ]; then
+    echo "ERROR: llvm-profdata/llvm-cov not found. Install llvm or build with download-ci-llvm."
+    exit 1
+  fi
+  echo "Using system LLVM tools: $LLVM_PROFDATA, $LLVM_COV"
+fi
 
 PROFRAW_DIR=/tmp/rust-coverage/profraw
 BATCH_DIR=/tmp/rust-coverage/batches

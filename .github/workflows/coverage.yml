@@ -35,16 +35,21 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -q
+          # llvm: provides llvm-profdata/llvm-cov for coverage report generation
           # inotify-tools: provides inotifywait for event-driven eager profraw merging
-          # (replaces polling watcher — fires instantly on close_write, no grace period)
-          sudo apt-get install -y -q inotify-tools rustfilt || true
+          sudo apt-get install -y -q llvm inotify-tools rustfilt || true
 
       - name: Configure build
         run: |
           cp bootstrap.example.toml config.toml
-          echo '' >> config.toml
-          echo '[build]' >> config.toml
-          echo 'profiler = true' >> config.toml
+          cat >> config.toml << 'EOF'
+
+          [build]
+          profiler = true
+
+          [llvm]
+          download-ci-llvm = false
+          EOF
 
       - name: Build instrumented stage1
         run: |
