@@ -1,0 +1,95 @@
+name: Compiler Coverage
+
+# Runs coverage analysis on the Rust compiler using an instrumented stage1 build.
+# Produces HTML + JSON reports and posts a markdown summary to the job page.
+#
+# Modes:
+#   quick  — 5 key test suites (async-await, coroutine, traits, closures, impl-trait)
+#   full   — all of tests/ui (~20,000 tests)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Coverage mode: quick or full"
+        required: false
+        default: quick
+  schedule:
+    # Run quick coverage weekly on Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+
+jobs:
+  coverage:
+    name: Compiler coverage (${{ github.event.inputs.mode || 'quick' }} mode)
+    runs-on: ubuntu-latest
+    # ubuntu-latest: 4 CPUs, 16GB RAM, ~84GB disk — sufficient for quick mode.
+    # For full mode, consider a larger runner.
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          # inotify-tools: provides inotifywait for event-driven eager profraw merging
+          # (replaces polling watcher — fires instantly on close_write, no grace period)
+          sudo apt-get install -y -q inotify-tools rustfilt || true
+
+      - name: Configure build
+        run: |
+          cp bootstrap.example.toml config.toml
+          echo '' >> config.toml
+          echo '[build]' >> config.toml
+          echo 'profiler = true' >> config.toml
+
+      - name: Build instrumented stage1
+        run: |
+          RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
+            python3 x.py build library --stage 1 --set build.profiler=true
+
+      - name: Verify runtest.rs patch is applied
+        run: |
+          grep -q "COMPILETEST_LLVM_PROFILE_DIR" src/tools/compiletest/src/runtest.rs || \
+            { echo "ERROR: runtest.rs missing COMPILETEST_LLVM_PROFILE_DIR patch"; exit 1; }
+
+      - name: Run coverage pipeline
+        env:
+          COVERAGE_MODE: ${{ github.event.inputs.mode || 'quick' }}
+        run: bash coverage/run_coverage.sh
+
+      - name: Post markdown summary
+        run: |
+          python3 coverage/analyze.py coverage/out-compiler/coverage.json --format md \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload only JSON + profdata — HTML is ~425MB and exceeds free plan artifact limits.
+      # HTML can be regenerated locally from the profdata artifact if needed.
+      - name: Upload coverage JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json-${{ github.event.inputs.mode || 'quick' }}
+          path: coverage/out-compiler/coverage.json
+          retention-days: 14
+
+      - name: Upload merged profdata
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profdata-${{ github.event.inputs.mode || 'quick' }}
+          path: coverage/out-compiler/merged.profdata
+          retention-days: 14
+
+      - name: Sanity check — coverage above threshold
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          with open("coverage/out-compiler/coverage.json") as f:
+              data = json.load(f)
+          s = data["data"][0]["totals"]["lines"]
+          pct = s["covered"] / s["count"] * 100
+          print(f"Line coverage: {pct:.1f}%")
+          if pct < 55:
+              print("ERROR: coverage dropped below 55% sanity threshold")
+              sys.exit(1)
+          EOF
