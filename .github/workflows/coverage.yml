@@ -57,7 +57,7 @@ jobs:
           profiler = true
 
           [llvm]
-          download-ci-llvm = "if-unchanged"
+          download-ci-llvm = false
           EOF
 
       - name: Cache stage1 build
@@ -66,6 +66,17 @@ jobs:
         with:
           path: build
           key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
+
+      - name: Refresh cache timestamps
+        if: steps.cache-stage1.outputs.cache-hit == 'true'
+        run: |
+          # After cache restore, source files have "now" timestamps (fresh checkout)
+          # which makes them appear newer than cached artifacts, triggering spurious rebuilds.
+          # Touch all cached artifacts so cargo/bootstrap sees them as up-to-date.
+          find build/ -type f \( -name "*.rlib" -o -name "*.rmeta" -o -name "*.d" \
+            -o -name "*.so" -o -name "*.a" -o -name "rustc" -o -name "*.dylib" \) \
+            -exec touch {} + 2>/dev/null || true
+          echo "Timestamps refreshed"
 
       - name: Build instrumented stage1
         if: steps.cache-stage1.outputs.cache-hit != 'true'
