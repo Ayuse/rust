@@ -29,24 +29,34 @@ echo "Platform: $HOST_TRIPLE"
 
 RUSTC="build/$HOST_TRIPLE/stage1/bin/rustc"
 
-# Prefer CI LLVM tools; fall back to system LLVM if not present (e.g. fork CI builds)
-_CI_PROFDATA="build/$HOST_TRIPLE/ci-llvm/bin/llvm-profdata"
-_CI_COV="build/$HOST_TRIPLE/ci-llvm/bin/llvm-cov"
-if [ -x "$_CI_PROFDATA" ]; then
-  LLVM_PROFDATA="$_CI_PROFDATA"
-  LLVM_COV="$_CI_COV"
-else
-  # Find a versioned system llvm-profdata (e.g. llvm-profdata-18)
-  LLVM_PROFDATA=$(command -v llvm-profdata 2>/dev/null || \
-    ls /usr/bin/llvm-profdata-* 2>/dev/null | sort -V | tail -1)
-  LLVM_COV=$(command -v llvm-cov 2>/dev/null || \
-    ls /usr/bin/llvm-cov-* 2>/dev/null | sort -V | tail -1)
-  if [ -z "$LLVM_PROFDATA" ] || [ -z "$LLVM_COV" ]; then
-    echo "ERROR: llvm-profdata/llvm-cov not found. Install llvm or build with download-ci-llvm."
-    exit 1
-  fi
-  echo "Using system LLVM tools: $LLVM_PROFDATA, $LLVM_COV"
+# Prefer LLVM tools that match the compiler — checked in priority order:
+#   1. CI LLVM download (download-ci-llvm = true, fast path)
+#   2. Source-built LLVM (download-ci-llvm = false)
+#   3. System LLVM (last resort — may have version mismatch with profraw format)
+_pick_llvm_tool() {
+  local name="$1"
+  local candidates=(
+    "build/$HOST_TRIPLE/ci-llvm/bin/$name"
+    "build/$HOST_TRIPLE/llvm/bin/$name"
+  )
+  for c in "${candidates[@]}"; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+  # System fallback: prefer unversioned, then highest versioned
+  command -v "$name" 2>/dev/null && return
+  ls /usr/bin/${name}-* 2>/dev/null | sort -V | tail -1
+}
+
+LLVM_PROFDATA=$(_pick_llvm_tool llvm-profdata)
+LLVM_COV=$(_pick_llvm_tool llvm-cov)
+
+if [ -z "$LLVM_PROFDATA" ] || [ -z "$LLVM_COV" ]; then
+  echo "ERROR: llvm-profdata/llvm-cov not found in build/ or system PATH."
+  echo "Install llvm or ensure stage1 build completed."
+  exit 1
 fi
+echo "llvm-profdata: $LLVM_PROFDATA"
+echo "llvm-cov:      $LLVM_COV"
 
 PROFRAW_DIR=/tmp/rust-coverage/profraw
 BATCH_DIR=/tmp/rust-coverage/batches
@@ -117,11 +127,11 @@ _do_merge() {
 
   if [ -f "$accumulated" ]; then
     "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" "$accumulated" -o "${accumulated}.tmp" 2>/dev/null && \
+      -f "$_WATCHER_LIST" "$accumulated" -o "${accumulated}.tmp" && \
       mv "${accumulated}.tmp" "$accumulated"
   else
     "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" -o "$accumulated" 2>/dev/null
+      -f "$_WATCHER_LIST" -o "$accumulated"
   fi
 
   # Delete the merged profraw files
