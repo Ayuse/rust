@@ -57,7 +57,7 @@ jobs:
           profiler = true
 
           [llvm]
-          download-ci-llvm = "if-available"
+          download-ci-llvm = true
           EOF
 
       - name: Cache stage1 build
