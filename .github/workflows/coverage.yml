@@ -64,6 +64,13 @@ jobs:
           RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
             python3 x.py build library --stage 1 --set build.profiler=true
 
+      - name: Save stage1 cache (eager — saves even if later steps fail)
+        if: steps.cache-stage1.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build
+          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('compiler/**/*.rs', 'library/**/*.rs', 'src/llvm-project') }}
+
       - name: Verify runtest.rs patch is applied
         run: |
           grep -q "COMPILETEST_LLVM_PROFILE_DIR" src/tools/compiletest/src/runtest.rs || \
