@@ -29,22 +29,31 @@ echo "Platform: $HOST_TRIPLE"
 
 RUSTC="build/$HOST_TRIPLE/stage1/bin/rustc"
 
-# Prefer LLVM tools that match the compiler — checked in priority order:
-#   1. CI LLVM download (download-ci-llvm = true, fast path)
-#   2. Source-built LLVM (download-ci-llvm = false)
-#   3. System LLVM (last resort — may have version mismatch with profraw format)
+# Pick the best available LLVM tool.
+#
+# On Linux: prefer system tools (apt-installed, compiled for x86-64 baseline).
+#   Build tools compiled from source on one runner can crash with SIGILL when
+#   restored from cache on a different runner with fewer CPU features.
+# On macOS: prefer build tools (version-matched to the compiler).
 _pick_llvm_tool() {
   local name="$1"
-  local candidates=(
-    "build/$HOST_TRIPLE/ci-llvm/bin/$name"
-    "build/$HOST_TRIPLE/llvm/bin/$name"
-  )
-  for c in "${candidates[@]}"; do
+  if [ "$_OS" = "Linux" ]; then
+    # System first on Linux — avoids SIGILL from cached cross-runner binaries
+    local sys
+    sys=$(command -v "$name" 2>/dev/null || \
+      ls /usr/bin/${name}-* 2>/dev/null | sort -V | tail -1)
+    [ -n "$sys" ] && { echo "$sys"; return; }
+  fi
+  # Build tools (CI download or source-built) — version-matched to compiler
+  local c
+  for c in \
+    "build/$HOST_TRIPLE/ci-llvm/bin/$name" \
+    "build/$HOST_TRIPLE/llvm/bin/$name"; do
     [ -x "$c" ] && { echo "$c"; return; }
   done
-  # System fallback: prefer unversioned, then highest versioned
-  command -v "$name" 2>/dev/null && return
-  ls /usr/bin/${name}-* 2>/dev/null | sort -V | tail -1
+  # Last resort: system (macOS or Linux without apt llvm)
+  command -v "$name" 2>/dev/null || \
+    ls /usr/bin/${name}-* 2>/dev/null | sort -V | tail -1
 }
 
 LLVM_PROFDATA=$(_pick_llvm_tool llvm-profdata)
