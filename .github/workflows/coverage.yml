@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('compiler/**/*.rs', 'library/**/*.rs', 'src/llvm-project') }}
+          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
 
       - name: Build instrumented stage1
         if: steps.cache-stage1.outputs.cache-hit != 'true'
@@ -78,7 +78,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build
-          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('compiler/**/*.rs', 'library/**/*.rs', 'src/llvm-project') }}
+          key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
 
       - name: Verify runtest.rs patch is applied
         run: |
