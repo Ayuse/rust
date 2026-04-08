@@ -34,10 +34,19 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Install LLVM 19 — must match profraw format version 10 used by current nightly rustc.
+          # Ubuntu apt ships LLVM 18 (format v9) which is incompatible.
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | \
+            sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" | \
+            sudo tee /etc/apt/sources.list.d/llvm-19.list
           sudo apt-get update -q
-          # llvm: provides llvm-profdata/llvm-cov for coverage report generation
-          # inotify-tools: provides inotifywait for event-driven eager profraw merging
-          sudo apt-get install -y -q llvm inotify-tools rustfilt || true
+          sudo apt-get install -y -q llvm-19 inotify-tools rustfilt || true
+          # Make llvm-19 tools available as unversioned names
+          sudo update-alternatives --install /usr/bin/llvm-profdata llvm-profdata \
+            /usr/bin/llvm-profdata-19 100
+          sudo update-alternatives --install /usr/bin/llvm-cov llvm-cov \
+            /usr/bin/llvm-cov-19 100
 
       - name: Configure build
         run: |
