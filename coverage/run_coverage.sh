@@ -136,11 +136,12 @@ _do_merge() {
 
   if [ -f "$accumulated" ]; then
     "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" "$accumulated" -o "${accumulated}.tmp" && \
-      mv "${accumulated}.tmp" "$accumulated"
+      -f "$_WATCHER_LIST" "$accumulated" -o "${accumulated}.tmp"
+    [ -s "${accumulated}.tmp" ] && mv "${accumulated}.tmp" "$accumulated" || \
+      rm -f "${accumulated}.tmp"
   else
     "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" -o "$accumulated"
+      -f "$_WATCHER_LIST" -o "$accumulated" || true
   fi
 
   # Delete the merged profraw files
