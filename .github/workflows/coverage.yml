@@ -67,16 +67,6 @@ jobs:
           path: build
           key: stage1-instrumented-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
 
-      - name: Refresh cache timestamps
-        if: steps.cache-stage1.outputs.cache-hit == 'true'
-        run: |
-          # After cache restore, source files have "now" timestamps (fresh checkout)
-          # making them appear newer than cached artifacts — bootstrap/ninja/cmake
-          # then decide everything needs rebuilding (LLVM included).
-          # Touch all files in build/ so they appear newer than any source file.
-          find build/ -type f -exec touch {} + 2>/dev/null || true
-          echo "Timestamps refreshed"
-
       - name: Build instrumented stage1
         if: steps.cache-stage1.outputs.cache-hit != 'true'
         run: |

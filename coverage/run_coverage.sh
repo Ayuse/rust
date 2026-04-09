@@ -316,7 +316,7 @@ for dir in "${TEST_DIRS[@]}"; do
   RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
   COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
   LLVM_PROFILE_FILE=/dev/null \
-  ./x.py test --stage 1 "$dir" --no-fail-fast --force-rerun 2>/dev/null || true
+  ./x.py test --stage 1 "$dir" --no-fail-fast --force-rerun --keep-stage 1 2>/dev/null || true
 
   stop_watcher
   echo "    Batch $BATCH_NUM done — disk: $(df -h / | awk 'NR==2{print $4}') free"
