@@ -30,6 +30,9 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup
+          sudo rm -rf /opt/az /imagegeneration
+          sudo docker image prune -a -f 2>/dev/null || true
           sudo apt-get clean
           df -h /
 

@@ -92,7 +92,13 @@ echo "Coverage mode: $COVERAGE_MODE"
 
 # Test suites
 if [ "$COVERAGE_MODE" = "full" ]; then
-  TEST_DIRS=( tests/ui )
+  # Split tests/ui into subdirectories so cleanup runs between each one.
+  # Running tests/ui as a single suite produces ~100GB of test artifacts
+  # with no cleanup opportunity, exhausting disk on GitHub Actions runners.
+  TEST_DIRS=()
+  while IFS= read -r d; do
+    TEST_DIRS+=("$d")
+  done < <(find tests/ui -mindepth 1 -maxdepth 1 -type d | sort)
 else
   TEST_DIRS=(
     tests/ui/async-await
@@ -314,9 +320,11 @@ TEST_ARTIFACT_DIR="build/$HOST_TRIPLE/test"
 # delete. Files older than 1 minute are guaranteed to be from completed tests.
 _artifact_cleanup_loop() {
   while true; do
-    sleep 60
+    sleep 30
     if [ -d "$TEST_ARTIFACT_DIR" ]; then
-      find "$TEST_ARTIFACT_DIR" -type f -mmin +1 -delete 2>/dev/null || true
+      # Delete test artifacts older than 30s — instrumented binaries are large
+      # and we only need the profraw files (written to /tmp, not here).
+      find "$TEST_ARTIFACT_DIR" -type f -mmin +0.5 -delete 2>/dev/null || true
       find "$TEST_ARTIFACT_DIR" -type d -empty -delete 2>/dev/null || true
     fi
     df -h / | awk 'NR==2{printf "    [cleanup] disk: %s free\n", $4}'
@@ -376,6 +384,10 @@ find "$BATCH_DIR" -name "*.profdata" > "$_WATCHER_LIST"
 "$LLVM_PROFDATA" merge -sparse -f "$_WATCHER_LIST" -o "$PROFDATA"
 echo "    Merged to: $PROFDATA ($(du -sh "$PROFDATA" | cut -f1))"
 
+# Free disk: remove batch profdata and leftover profraw — no longer needed
+rm -rf "$BATCH_DIR" "$PROFRAW_DIR"
+df -h / | awk 'NR==2{printf "    Disk after cleanup: %s free\n", $4}'
+
 # ── Step 4: Generate reports ──────────────────────────────────────────────────
 echo "[4/5] Generating reports..."
 
@@ -387,17 +399,23 @@ echo "=== Coverage Summary (compiler sources only) ==="
   --ignore-filename-regex='\.cargo|library|/tmp' \
   2>&1 | tail -5
 
-echo ""
-echo "=== HTML report (Fuchsia --show-directory-coverage) ==="
-"$LLVM_COV" show "$RUSTC" \
-  --object "$DYLIB" \
-  --instr-profile="$PROFDATA" \
-  --format=html \
-  --show-directory-coverage \
-  --ignore-filename-regex='\.cargo|library|/tmp' \
-  -o "$HTML_OUT"
-echo "    HTML written to: $HTML_OUT"
-echo "    Open: open $HTML_OUT/index.html"
+# HTML report (~425MB) — skip in CI to save disk, generate only when running locally
+if [ -z "${CI:-}" ]; then
+  echo ""
+  echo "=== HTML report (Fuchsia --show-directory-coverage) ==="
+  "$LLVM_COV" show "$RUSTC" \
+    --object "$DYLIB" \
+    --instr-profile="$PROFDATA" \
+    --format=html \
+    --show-directory-coverage \
+    --ignore-filename-regex='\.cargo|library|/tmp' \
+    -o "$HTML_OUT"
+  echo "    HTML written to: $HTML_OUT"
+  echo "    Open: open $HTML_OUT/index.html"
+else
+  echo ""
+  echo "=== Skipping HTML report in CI (saves ~425MB disk) ==="
+fi
 
 # ── Step 5: Export machine-readable JSON ──────────────────────────────────────
 echo ""
