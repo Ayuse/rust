@@ -296,31 +296,34 @@ stop_watcher() {
 trap 'rm -f "$_WATCHER_LIST"' EXIT
 
 # ── Step 2: Run tests via compiletest + eager merge ───────────────────────────
+# All test directories are passed to a single x.py invocation so the stage1
+# sysroot (std + test helpers) is built exactly once instead of once per suite.
 echo "[2/5] Running tests via compiletest with eager profraw merging..."
+echo "  Suites: ${TEST_DIRS[*]}"
 
-BATCH_NUM=0
-TOTAL=${#TEST_DIRS[@]}
-DONE=0
-
+# Filter to directories that actually exist
+VALID_TEST_DIRS=()
 for dir in "${TEST_DIRS[@]}"; do
-  [ -d "$dir" ] || continue
-  DONE=$((DONE + 1))
-  BATCH_NUM=$((BATCH_NUM + 1))
-  BATCH_PROFDATA="$BATCH_DIR/batch_${BATCH_NUM}.profdata"
-  echo "  [$DONE/$TOTAL] $dir"
-
-  start_watcher "$BATCH_PROFDATA"
-
-  # LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
-  # compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
-  RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
-  COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
-  LLVM_PROFILE_FILE=/dev/null \
-  ./x.py test --stage 1 "$dir" --no-fail-fast --force-rerun --keep-stage 1 2>/dev/null || true
-
-  stop_watcher
-  echo "    Batch $BATCH_NUM done — disk: $(df -h / | awk 'NR==2{print $4}') free"
+  [ -d "$dir" ] && VALID_TEST_DIRS+=("$dir")
 done
+
+if [ "${#VALID_TEST_DIRS[@]}" -eq 0 ]; then
+  echo "ERROR: None of the requested test directories exist."
+  exit 1
+fi
+
+BATCH_PROFDATA="$BATCH_DIR/batch_1.profdata"
+start_watcher "$BATCH_PROFDATA"
+
+# LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
+# compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
+RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
+COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
+LLVM_PROFILE_FILE=/dev/null \
+./x.py test --stage 1 "${VALID_TEST_DIRS[@]}" --no-fail-fast --force-rerun --keep-stage 1 2>/dev/null || true
+
+stop_watcher
+echo "  Done — disk: $(df -h / | awk 'NR==2{print $4}') free"
 
 PROFDATA_COUNT=$(find "$BATCH_DIR" -name "*.profdata" | wc -l | tr -d ' ')
 echo "    Batches collected: $PROFDATA_COUNT"
