@@ -296,24 +296,10 @@ stop_watcher() {
 trap 'rm -f "$_WATCHER_LIST"' EXIT
 
 # ── Step 2: Run tests via compiletest + eager merge ───────────────────────────
-# All test directories are passed to a single x.py invocation so the stage1
-# sysroot (std + test helpers) is built exactly once instead of once per suite.
+# Run each suite separately so we can clean test artifacts (compiled binaries,
+# debug info) between suites. On CI, 3500+ tests accumulate ~100GB of artifacts.
+# The sysroot is built once on the first invocation; --keep-stage 1 reuses it.
 echo "[2/5] Running tests via compiletest with eager profraw merging..."
-echo "  Suites: ${TEST_DIRS[*]}"
-
-# Filter to directories that actually exist
-VALID_TEST_DIRS=()
-for dir in "${TEST_DIRS[@]}"; do
-  [ -d "$dir" ] && VALID_TEST_DIRS+=("$dir")
-done
-
-if [ "${#VALID_TEST_DIRS[@]}" -eq 0 ]; then
-  echo "ERROR: None of the requested test directories exist."
-  exit 1
-fi
-
-BATCH_PROFDATA="$BATCH_DIR/batch_1.profdata"
-start_watcher "$BATCH_PROFDATA"
 
 # Unset GITHUB_ACTIONS so bootstrap uses the non-CI commit detection path for
 # download-ci-llvm. On a fork's CI, the CI path (HEAD^1) resolves to our own
@@ -321,15 +307,37 @@ start_watcher "$BATCH_PROFDATA"
 # commits and finds the real upstream merge base.
 unset GITHUB_ACTIONS
 
-# LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
-# compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
-RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
-COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
-LLVM_PROFILE_FILE=/dev/null \
-./x.py test --stage 1 "${VALID_TEST_DIRS[@]}" --no-fail-fast --force-rerun --keep-stage 1 || true
+TEST_ARTIFACT_DIR="build/$HOST_TRIPLE/test"
+BATCH_NUM=0
+TOTAL=${#TEST_DIRS[@]}
+DONE=0
 
-stop_watcher
-echo "  Done — disk: $(df -h / | awk 'NR==2{print $4}') free"
+for dir in "${TEST_DIRS[@]}"; do
+  [ -d "$dir" ] || continue
+  DONE=$((DONE + 1))
+  BATCH_NUM=$((BATCH_NUM + 1))
+  BATCH_PROFDATA="$BATCH_DIR/batch_${BATCH_NUM}.profdata"
+  echo "  [$DONE/$TOTAL] $dir"
+
+  start_watcher "$BATCH_PROFDATA"
+
+  # LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
+  # compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
+  RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
+  COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
+  LLVM_PROFILE_FILE=/dev/null \
+  ./x.py test --stage 1 "$dir" --no-fail-fast --force-rerun --keep-stage 1 || true
+
+  stop_watcher
+
+  # Clean test artifacts (compiled binaries, debug info) to reclaim disk.
+  # These can be 10-30GB per suite on instrumented builds.
+  if [ -d "$TEST_ARTIFACT_DIR" ]; then
+    echo "    Cleaning test artifacts: $(du -sh "$TEST_ARTIFACT_DIR" | cut -f1)"
+    rm -rf "$TEST_ARTIFACT_DIR"
+  fi
+  echo "    Batch $BATCH_NUM done — disk: $(df -h / | awk 'NR==2{print $4}') free"
+done
 
 PROFDATA_COUNT=$(find "$BATCH_DIR" -name "*.profdata" | wc -l | tr -d ' ')
 echo "    Batches collected: $PROFDATA_COUNT"
