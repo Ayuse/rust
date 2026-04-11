@@ -292,13 +292,11 @@ stop_watcher() {
   done
 }
 
-# Cleanup temp list file on exit
-trap 'rm -f "$_WATCHER_LIST"' EXIT
+# Cleanup temp list file and background processes on exit
+CLEANUP_PID=""
+trap 'rm -f "$_WATCHER_LIST"; [ -n "$CLEANUP_PID" ] && kill "$CLEANUP_PID" 2>/dev/null' EXIT
 
 # ── Step 2: Run tests via compiletest + eager merge ───────────────────────────
-# Run each suite separately so we can clean test artifacts (compiled binaries,
-# debug info) between suites. On CI, 3500+ tests accumulate ~100GB of artifacts.
-# The sysroot is built once on the first invocation; --keep-stage 1 reuses it.
 echo "[2/5] Running tests via compiletest with eager profraw merging..."
 
 # Unset GITHUB_ACTIONS so bootstrap uses the non-CI commit detection path for
@@ -308,6 +306,25 @@ echo "[2/5] Running tests via compiletest with eager profraw merging..."
 unset GITHUB_ACTIONS
 
 TEST_ARTIFACT_DIR="build/$HOST_TRIPLE/test"
+
+# Background cleanup: continuously delete old test artifacts (compiled binaries,
+# object files, debug info) to prevent disk exhaustion. Compiletest accumulates
+# these in build/$HOST/test/ — with 3500+ instrumented-build tests they reach
+# ~100GB. We only need the profraw files (in /tmp), so old artifacts are safe to
+# delete. Files older than 1 minute are guaranteed to be from completed tests.
+_artifact_cleanup_loop() {
+  while true; do
+    sleep 60
+    if [ -d "$TEST_ARTIFACT_DIR" ]; then
+      find "$TEST_ARTIFACT_DIR" -type f -mmin +1 -delete 2>/dev/null || true
+      find "$TEST_ARTIFACT_DIR" -type d -empty -delete 2>/dev/null || true
+    fi
+    df -h / | awk 'NR==2{printf "    [cleanup] disk: %s free\n", $4}'
+  done
+}
+_artifact_cleanup_loop &
+CLEANUP_PID=$!
+
 BATCH_NUM=0
 TOTAL=${#TEST_DIRS[@]}
 DONE=0
@@ -330,14 +347,16 @@ for dir in "${TEST_DIRS[@]}"; do
 
   stop_watcher
 
-  # Clean test artifacts (compiled binaries, debug info) to reclaim disk.
-  # These can be 10-30GB per suite on instrumented builds.
+  # Bulk cleanup between suites
   if [ -d "$TEST_ARTIFACT_DIR" ]; then
     echo "    Cleaning test artifacts: $(du -sh "$TEST_ARTIFACT_DIR" | cut -f1)"
     rm -rf "$TEST_ARTIFACT_DIR"
   fi
   echo "    Batch $BATCH_NUM done — disk: $(df -h / | awk 'NR==2{print $4}') free"
 done
+
+kill "$CLEANUP_PID" 2>/dev/null || true
+CLEANUP_PID=""
 
 PROFDATA_COUNT=$(find "$BATCH_DIR" -name "*.profdata" | wc -l | tr -d ' ')
 echo "    Batches collected: $PROFDATA_COUNT"
