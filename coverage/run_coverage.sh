@@ -2,9 +2,8 @@
 # Coverage pipeline for the Rust compiler.
 # - Hooks into compiletest via COMPILETEST_LLVM_PROFILE_DIR so tests run with correct
 #   flags, editions, and revisions (not hardcoded --edition 2021)
-# - Eager merging via filesystem events:
-#     Linux  — inotifywait (close_write): zero grace period, instant safe merge
-#     macOS  — fswatch (Updated) + size-stability check, or polling fallback
+# - Uses LLVM's %m online profile merging: each rustc process atomically merges
+#   counters into a shared pool file via file locking — no external watcher needed
 # - Platform-agnostic: macOS (aarch64/x86_64) and Linux (x86_64/aarch64)
 #
 # Usage:
@@ -68,17 +67,12 @@ echo "llvm-profdata: $LLVM_PROFDATA"
 echo "llvm-cov:      $LLVM_COV"
 
 PROFRAW_DIR=/tmp/rust-coverage/profraw
-BATCH_DIR=/tmp/rust-coverage/batches
 PROFDATA=coverage/out-compiler/merged.profdata
 HTML_OUT=coverage/html-compiler
 JSON_OUT=coverage/out-compiler/coverage.json
 
 # COVERAGE_MODE: "quick" runs 5 key suites; "full" runs all of tests/ui
 COVERAGE_MODE="${COVERAGE_MODE:-quick}"
-
-# Watcher batch size: max profraw files to merge in one llvm-profdata call.
-# Each file is ~15MB; 200 × 15MB = 3GB per merge — fast on SSD, bounded memory.
-WATCHER_BATCH=200
 
 # Dynamically find the active librustc_driver — hash changes on every rebuild
 DYLIB=$(find "build/$HOST_TRIPLE/stage1-rustc/$HOST_TRIPLE/release/deps" \
@@ -110,200 +104,20 @@ else
 fi
 
 # ── Step 1: Clean old profraw and batch files ─────────────────────────────────
-echo "[1/5] Cleaning old profraw and batch files..."
-mkdir -p "$PROFRAW_DIR" "$BATCH_DIR" coverage/out-compiler
+echo "[1/5] Cleaning old profraw files..."
+mkdir -p "$PROFRAW_DIR" coverage/out-compiler
 find "$PROFRAW_DIR" -name "*.profraw" -delete 2>/dev/null || true
-find "$BATCH_DIR" -name "*.profdata" -delete 2>/dev/null || true
 
-# ── Watcher ───────────────────────────────────────────────────────────────────
-#
-# Merges profraw files into a running accumulated profdata as they are written,
-# keeping peak disk usage bounded to WATCHER_BATCH × ~15MB.
-#
-# Uses filesystem events for zero-latency detection:
-#   Linux:  inotifywait --event close_write  (fires when fd is closed — file is complete)
-#   macOS:  fswatch --event Updated + size-stability check (FSEvents has no close_write)
-#           Falls back to polling if fswatch is not installed.
-#
-# Usage:
-#   start_watcher <accumulated.profdata>
-#   stop_watcher
-
-WATCHER_PID=""
-WATCHER_ACCUMULATED=""
-_WATCHER_LIST=$(mktemp /tmp/profraw_list.XXXXXX)
-
-# Core merge function: reads file list from $_WATCHER_LIST, merges into accumulated profdata.
-# Uses -f (file list) to avoid ARG_MAX limits and -failure-mode=all to skip corrupt files.
-_do_merge() {
-  local accumulated="$1"
-  local count="$2"
-  [ "$count" -eq 0 ] && return 0
-
-  if [ -f "$accumulated" ]; then
-    "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" "$accumulated" -o "${accumulated}.tmp"
-    [ -s "${accumulated}.tmp" ] && mv "${accumulated}.tmp" "$accumulated" || \
-      rm -f "${accumulated}.tmp"
-  else
-    "$LLVM_PROFDATA" merge -sparse -failure-mode=all \
-      -f "$_WATCHER_LIST" -o "$accumulated" || true
-  fi
-
-  # Delete the merged profraw files
-  while IFS= read -r f; do rm -f "$f"; done < "$_WATCHER_LIST"
-
-  echo "    [watcher] merged $count profraw → $(du -sh "$accumulated" | cut -f1) accumulated"
-}
-
-# ── Linux watcher: inotifywait ────────────────────────────────────────────────
-# close_write fires the instant rustc closes the profraw fd — no grace period needed.
-# Accumulates events for up to 0.5s of idle time, then merges the batch.
-_watcher_loop_linux() {
-  local profraw_dir="$1"
-  local accumulated="$2"
-
-  # Raise the inotify event queue to handle high-throughput bursts.
-  # At 200 files/sec, the default 16384 queue overflows in ~80s.
-  sudo sysctl -w fs.inotify.max_queued_events=524288 2>/dev/null || true
-
-  inotifywait -m -q \
-    --event close_write \
-    --format '%w%f' \
-    "$profraw_dir" 2>/dev/null | \
-  while true; do
-    : > "$_WATCHER_LIST"
-    count=0
-
-    # Collect events until 0.5s of silence or WATCHER_BATCH files accumulated.
-    # read -t 0.5 returns immediately on each event during a burst, and times
-    # out after 0.5s of quiet — triggering the merge.
-    while IFS= read -r -t 0.5 filepath; do
-      [[ "$filepath" == *.profraw ]] || continue
-      echo "$filepath" >> "$_WATCHER_LIST"
-      count=$((count + 1))
-      [ "$count" -ge "$WATCHER_BATCH" ] && break
-    done
-
-    [ "$count" -eq 0 ] && continue
-    _do_merge "$accumulated" "$count"
-  done
-}
-
-# ── macOS watcher: fswatch + size-stability ───────────────────────────────────
-# FSEvents has no close_write equivalent. We watch for Updated events, then
-# wait until the file size stops changing (typically < 100ms for rustc).
-_watcher_loop_macos_fswatch() {
-  local profraw_dir="$1"
-  local accumulated="$2"
-
-  fswatch -m poll_monitor \
-    --event Updated \
-    --format '%p' \
-    "$profraw_dir" 2>/dev/null | \
-  while true; do
-    : > "$_WATCHER_LIST"
-    count=0
-
-    while IFS= read -r -t 0.5 filepath; do
-      [[ "$filepath" == *.profraw ]] || continue
-      # Size-stability check: poll until size stops changing.
-      # rustc writes profraw at exit in one shot so this converges in 1-2 polls.
-      local prev=-1 curr
-      curr=$(stat -f%z "$filepath" 2>/dev/null) || continue
-      while [ "$curr" -ne "$prev" ]; do
-        prev=$curr
-        sleep 0.05
-        curr=$(stat -f%z "$filepath" 2>/dev/null) || break
-      done
-      echo "$filepath" >> "$_WATCHER_LIST"
-      count=$((count + 1))
-      [ "$count" -ge "$WATCHER_BATCH" ] && break
-    done
-
-    [ "$count" -eq 0 ] && continue
-    _do_merge "$accumulated" "$count"
-  done
-}
-
-# ── Polling watcher: fallback ─────────────────────────────────────────────────
-# Used on macOS when fswatch is not installed, or as a universal fallback.
-# Uses a marker file to find profraw files that have been idle for 3+ seconds.
-_watcher_loop_polling() {
-  local profraw_dir="$1"
-  local accumulated="$2"
-
-  while true; do
-    sleep 5
-    local marker
-    marker=$(mktemp)
-    sleep 3  # grace: files older than marker are safe to merge
-
-    : > "$_WATCHER_LIST"
-    count=0
-    while IFS= read -r f; do
-      echo "$f" >> "$_WATCHER_LIST"
-      count=$((count + 1))
-      [ "$count" -ge "$WATCHER_BATCH" ] && break
-    done < <(find "$profraw_dir" -name "*.profraw" -not -newer "$marker" 2>/dev/null)
-    rm -f "$marker"
-
-    [ "$count" -lt 20 ] && continue  # don't bother for tiny batches
-    _do_merge "$accumulated" "$count"
-  done
-}
-
-# ── Dispatch: pick the best available watcher backend ────────────────────────
-_watcher_loop() {
-  local profraw_dir="$1"
-  local accumulated="$2"
-
-  if [ "$_OS" = "Linux" ] && command -v inotifywait >/dev/null 2>&1; then
-    echo "    [watcher] backend: inotifywait (close_write)"
-    _watcher_loop_linux "$profraw_dir" "$accumulated"
-  elif [ "$_OS" = "Darwin" ] && command -v fswatch >/dev/null 2>&1; then
-    echo "    [watcher] backend: fswatch (Updated + size-stability)"
-    _watcher_loop_macos_fswatch "$profraw_dir" "$accumulated"
-  else
-    echo "    [watcher] backend: polling (install inotify-tools on Linux or fswatch on macOS for faster merging)"
-    _watcher_loop_polling "$profraw_dir" "$accumulated"
-  fi
-}
-
-start_watcher() {
-  WATCHER_ACCUMULATED="$1"
-  _watcher_loop "$PROFRAW_DIR" "$WATCHER_ACCUMULATED" &
-  WATCHER_PID=$!
-}
-
-stop_watcher() {
-  if [ -n "$WATCHER_PID" ]; then
-    kill "$WATCHER_PID" 2>/dev/null || true
-    wait "$WATCHER_PID" 2>/dev/null || true
-    WATCHER_PID=""
-  fi
-
-  # Flush all remaining profraw in WATCHER_BATCH-sized batches.
-  # No grace period needed — compiletest is done, no files still being written.
-  while true; do
-    : > "$_WATCHER_LIST"
-    count=0
-    while IFS= read -r f; do
-      echo "$f" >> "$_WATCHER_LIST"
-      count=$((count + 1))
-      [ "$count" -ge "$WATCHER_BATCH" ] && break
-    done < <(find "$PROFRAW_DIR" -name "*.profraw" 2>/dev/null)
-    [ "$count" -eq 0 ] && break
-    _do_merge "$WATCHER_ACCUMULATED" "$count"
-  done
-}
-
-# Cleanup temp list file and background processes on exit
+# Cleanup background processes on exit
 CLEANUP_PID=""
-trap 'rm -f "$_WATCHER_LIST"; [ -n "$CLEANUP_PID" ] && kill "$CLEANUP_PID" 2>/dev/null' EXIT
+trap '[ -n "$CLEANUP_PID" ] && kill "$CLEANUP_PID" 2>/dev/null' EXIT
 
-# ── Step 2: Run tests via compiletest + eager merge ───────────────────────────
-echo "[2/5] Running tests via compiletest with eager profraw merging..."
+# ── Step 2: Run tests with online profile merging ────────────────────────────
+# Uses LLVM's %m profraw modifier: each rustc process atomically merges its
+# counters into a shared pool file using file locking. No watcher needed —
+# the LLVM runtime handles merging, eliminating TOCTOU races and keeping
+# disk usage bounded to one pool file (~50MB) instead of thousands (~100GB).
+echo "[2/5] Running tests with online profile merging (%m)..."
 
 # Unset GITHUB_ACTIONS so bootstrap uses the non-CI commit detection path for
 # download-ci-llvm. On a fork's CI, the CI path (HEAD^1) resolves to our own
@@ -335,59 +149,58 @@ _artifact_cleanup_loop() {
 _artifact_cleanup_loop &
 CLEANUP_PID=$!
 
-BATCH_NUM=0
 TOTAL=${#TEST_DIRS[@]}
 DONE=0
 
 for dir in "${TEST_DIRS[@]}"; do
   [ -d "$dir" ] || continue
   DONE=$((DONE + 1))
-  BATCH_NUM=$((BATCH_NUM + 1))
-  BATCH_PROFDATA="$BATCH_DIR/batch_${BATCH_NUM}.profdata"
   echo "  [$DONE/$TOTAL] $dir"
-
-  start_watcher "$BATCH_PROFDATA"
 
   # LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
   # compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
+  # The %m modifier in runtest.rs makes each rustc process atomically merge its
+  # counters into a shared pool file via file locking — no external watcher needed.
   RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
   COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
   LLVM_PROFILE_FILE=/dev/null \
   ./x.py test --stage 1 "$dir" --no-fail-fast --force-rerun --keep-stage 1 || true
-
-  stop_watcher
 
   # Bulk cleanup between suites
   if [ -d "$TEST_ARTIFACT_DIR" ]; then
     echo "    Cleaning test artifacts: $(du -sh "$TEST_ARTIFACT_DIR" | cut -f1)"
     rm -rf "$TEST_ARTIFACT_DIR"
   fi
-  echo "    Batch $BATCH_NUM done — disk: $(df -h / | awk 'NR==2{print $4}') free"
+  echo "    [$DONE/$TOTAL] done — disk: $(df -h / | awk 'NR==2{print $4}') free"
 done
 
 kill "$CLEANUP_PID" 2>/dev/null || true
 CLEANUP_PID=""
 
-PROFDATA_COUNT=$(find "$BATCH_DIR" -name "*.profdata" | wc -l | tr -d ' ')
-echo "    Batches collected: $PROFDATA_COUNT"
+# ── Step 3: Merge profraw pool files ─────────────────────────────────────────
+echo "[3/5] Merging profraw pool files..."
+PROFRAW_LIST=$(mktemp /tmp/profraw_list.XXXXXX)
+trap 'rm -f "$PROFRAW_LIST"' EXIT
+find "$PROFRAW_DIR" -name "*.profraw" > "$PROFRAW_LIST"
+PROFRAW_COUNT=$(wc -l < "$PROFRAW_LIST" | tr -d ' ')
+echo "    Pool files found: $PROFRAW_COUNT"
 
-if [ "$PROFDATA_COUNT" -eq 0 ]; then
-  echo "ERROR: No profdata batches found. Is the compiler instrumented and runtest.rs patched?"
+if [ "$PROFRAW_COUNT" -eq 0 ]; then
+  echo "ERROR: No profraw pool files found. Is the compiler instrumented and runtest.rs patched?"
   echo ""
   echo "Build command:"
   echo "  RUSTFLAGS_BOOTSTRAP=\"-Cinstrument-coverage -Ccodegen-units=1\" \\"
   echo "    ./x.py build library --stage 1 --set build.profiler=true"
+  rm -f "$PROFRAW_LIST"
   exit 1
 fi
 
-# ── Step 3: Final merge of all batches ───────────────────────────────────────
-echo "[3/5] Merging all batches..."
-find "$BATCH_DIR" -name "*.profdata" > "$_WATCHER_LIST"
-"$LLVM_PROFDATA" merge -sparse -f "$_WATCHER_LIST" -o "$PROFDATA"
+"$LLVM_PROFDATA" merge -sparse -failure-mode=all -f "$PROFRAW_LIST" -o "$PROFDATA"
 echo "    Merged to: $PROFDATA ($(du -sh "$PROFDATA" | cut -f1))"
+rm -f "$PROFRAW_LIST"
 
-# Free disk: remove batch profdata and leftover profraw — no longer needed
-rm -rf "$BATCH_DIR" "$PROFRAW_DIR"
+# Free disk: remove profraw pool files — no longer needed
+rm -rf "$PROFRAW_DIR"
 df -h / | awk 'NR==2{printf "    Disk after cleanup: %s free\n", $4}'
 
 # ── Step 4: Generate reports ──────────────────────────────────────────────────
