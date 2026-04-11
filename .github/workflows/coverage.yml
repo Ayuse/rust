@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: stage1-instrumented-v3-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
+          key: stage1-instrumented-v4-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
 
       - name: Build instrumented stage1
         if: steps.cache-stage1.outputs.cache-hit != 'true'
@@ -79,12 +79,22 @@ jobs:
           RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
             python3 x.py build library --stage 1 --set build.profiler=true
 
+      - name: Trim build dir before caching
+        if: steps.cache-stage1.outputs.cache-hit != 'true'
+        run: |
+          # Remove LLVM source-build artifacts (multi-GB) — we use ci-llvm/ (downloaded).
+          # Also remove incremental caches and other bulk that isn't needed at test time.
+          rm -rf build/x86_64-unknown-linux-gnu/llvm
+          rm -rf build/x86_64-unknown-linux-gnu/lld
+          find build -name incremental -type d -exec rm -rf {} + 2>/dev/null || true
+          du -sh build/
+
       - name: Save stage1 cache (eager — saves even if later steps fail)
         if: steps.cache-stage1.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: build
-          key: stage1-instrumented-v3-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
+          key: stage1-instrumented-v4-${{ runner.os }}-${{ hashFiles('src/llvm-project') }}
 
       - name: Verify runtest.rs patch is applied
         run: |
