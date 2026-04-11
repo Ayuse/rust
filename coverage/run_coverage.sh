@@ -322,10 +322,12 @@ _artifact_cleanup_loop() {
   while true; do
     sleep 30
     if [ -d "$TEST_ARTIFACT_DIR" ]; then
-      # Delete test artifacts older than 30s — instrumented binaries are large
+      # Delete test artifact FILES older than 2 min — instrumented binaries are large
       # and we only need the profraw files (written to /tmp, not here).
-      find "$TEST_ARTIFACT_DIR" -type f -mmin +0.5 -delete 2>/dev/null || true
-      find "$TEST_ARTIFACT_DIR" -type d -empty -delete 2>/dev/null || true
+      # IMPORTANT: Do NOT delete directories — compiletest creates output dirs before
+      # writing .out files. Deleting empty dirs causes "No such file or directory"
+      # panics. Directory cleanup happens in the between-suite rm -rf.
+      find "$TEST_ARTIFACT_DIR" -type f -mmin +2 -delete 2>/dev/null || true
     fi
     df -h / | awk 'NR==2{printf "    [cleanup] disk: %s free\n", $4}'
   done
