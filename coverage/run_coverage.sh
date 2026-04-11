@@ -315,12 +315,18 @@ fi
 BATCH_PROFDATA="$BATCH_DIR/batch_1.profdata"
 start_watcher "$BATCH_PROFDATA"
 
+# Unset GITHUB_ACTIONS so bootstrap uses the non-CI commit detection path for
+# download-ci-llvm. On a fork's CI, the CI path (HEAD^1) resolves to our own
+# commits which have no CI artifacts. The non-CI path searches for bors-authored
+# commits and finds the real upstream merge base.
+unset GITHUB_ACTIONS
+
 # LLVM_PROFILE_FILE=/dev/null suppresses profraw from the compiletest binary itself.
 # compose_and_run_compiler() in runtest.rs overrides it with the correct path for rustc children.
 RUSTFLAGS_BOOTSTRAP="-Cinstrument-coverage -Ccodegen-units=1" \
 COMPILETEST_LLVM_PROFILE_DIR="$PROFRAW_DIR" \
 LLVM_PROFILE_FILE=/dev/null \
-./x.py test --stage 1 "${VALID_TEST_DIRS[@]}" --no-fail-fast --force-rerun --keep-stage 1 2>/dev/null || true
+./x.py test --stage 1 "${VALID_TEST_DIRS[@]}" --no-fail-fast --force-rerun --keep-stage 1 || true
 
 stop_watcher
 echo "  Done — disk: $(df -h / | awk 'NR==2{print $4}') free"
