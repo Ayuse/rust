@@ -7,8 +7,9 @@
 # - Platform-agnostic: macOS (aarch64/x86_64) and Linux (x86_64/aarch64)
 #
 # Usage:
-#   bash coverage/run_coverage.sh                        # quick mode: 5 key suites
-#   COVERAGE_MODE=full bash coverage/run_coverage.sh     # full tests/ui
+#   bash coverage/run_coverage.sh                        # full mode: all test suites
+#   COVERAGE_MODE=quick bash coverage/run_coverage.sh    # quick: default 5 ui suites
+#   COVERAGE_MODE=quick COVERAGE_SUITES="tests/ui/traits,tests/mir-opt" bash coverage/run_coverage.sh
 
 set -euo pipefail
 
@@ -71,8 +72,10 @@ PROFDATA=coverage/out-compiler/merged.profdata
 HTML_OUT=coverage/html-compiler
 JSON_OUT=coverage/out-compiler/coverage.json
 
-# COVERAGE_MODE: "quick" runs 5 key suites; "full" runs all of tests/ui
-COVERAGE_MODE="${COVERAGE_MODE:-quick}"
+# COVERAGE_MODE: "full" runs all compiletest suites; "quick" runs user-specified suites
+COVERAGE_MODE="${COVERAGE_MODE:-full}"
+# COVERAGE_SUITES: comma-separated list of test paths (quick mode only)
+COVERAGE_SUITES="${COVERAGE_SUITES:-}"
 
 # Dynamically find the active librustc_driver — hash changes on every rebuild
 DYLIB=$(find "build/$HOST_TRIPLE/stage1-rustc/$HOST_TRIPLE/release/deps" \
@@ -85,23 +88,65 @@ echo "Using dylib: $DYLIB"
 echo "Coverage mode: $COVERAGE_MODE"
 
 # Test suites
+#
+# Full mode runs all compiletest suites. tests/ui is split into subdirectories
+# so cleanup runs between each one — running it as a single suite produces ~100GB
+# of test artifacts with no cleanup opportunity, exhausting disk.
+#
+# Quick mode accepts user-specified suites via COVERAGE_SUITES (comma-separated).
+# Defaults to 5 key ui suites if none specified.
+
+# Suites excluded from full mode:
+#   tests/auxiliary    — helper files, not a test suite
+#   tests/build-std   — requires special setup (rebuilds std)
+#   tests/rustdoc-gui  — requires browser/webdriver
+#   tests/rustdoc-js-std — tests JS search index, not compiler code
+FULL_SUITES=(
+  tests/assembly-llvm
+  tests/codegen-llvm
+  tests/codegen-units
+  tests/coverage
+  tests/coverage-run-rustdoc
+  tests/crashes
+  tests/debuginfo
+  tests/incremental
+  tests/mir-opt
+  tests/pretty
+  tests/run-make
+  tests/run-make-cargo
+  tests/rustdoc-html
+  tests/rustdoc-js
+  tests/rustdoc-json
+  tests/rustdoc-ui
+  tests/ui-fulldeps
+)
+
+DEFAULT_QUICK_SUITES="tests/ui/async-await,tests/ui/coroutine,tests/ui/traits,tests/ui/closures,tests/ui/impl-trait"
+
+TEST_DIRS=()
+
 if [ "$COVERAGE_MODE" = "full" ]; then
-  # Split tests/ui into subdirectories so cleanup runs between each one.
-  # Running tests/ui as a single suite produces ~100GB of test artifacts
-  # with no cleanup opportunity, exhausting disk on GitHub Actions runners.
-  TEST_DIRS=()
+  # Add non-ui suites as-is (they're small enough to run without splitting)
+  for suite in "${FULL_SUITES[@]}"; do
+    [ -d "$suite" ] && TEST_DIRS+=("$suite")
+  done
+  # Split tests/ui into subdirectories for disk management
   while IFS= read -r d; do
     TEST_DIRS+=("$d")
   done < <(find tests/ui -mindepth 1 -maxdepth 1 -type d | sort)
 else
-  TEST_DIRS=(
-    tests/ui/async-await
-    tests/ui/coroutine
-    tests/ui/traits
-    tests/ui/closures
-    tests/ui/impl-trait
-  )
+  # Quick mode: use user-specified suites or defaults
+  SUITES="${COVERAGE_SUITES:-$DEFAULT_QUICK_SUITES}"
+  IFS=',' read -ra SUITE_LIST <<< "$SUITES"
+  for s in "${SUITE_LIST[@]}"; do
+    # Trim whitespace
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    [ -n "$s" ] && TEST_DIRS+=("$s")
+  done
 fi
+
+echo "Test suites to run: ${#TEST_DIRS[@]}"
 
 # ── Step 1: Clean old profraw and batch files ─────────────────────────────────
 echo "[1/5] Cleaning old profraw files..."

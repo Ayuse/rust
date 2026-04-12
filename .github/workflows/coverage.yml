@@ -4,8 +4,8 @@ name: Compiler Coverage
 # Produces HTML + JSON reports and posts a markdown summary to the job page.
 #
 # Modes:
-#   quick  — 5 key test suites (async-await, coroutine, traits, closures, impl-trait)
-#   full   — all of tests/ui (~20,000 tests)
+#   quick  — user-specified test suites (defaults to 5 key ui suites)
+#   full   — all compiletest suites (ui, mir-opt, run-make, codegen, coverage, etc.)
 
 on:
   workflow_dispatch:
@@ -13,14 +13,18 @@ on:
       mode:
         description: "Coverage mode: quick or full"
         required: false
-        default: quick
+        default: full
+      suites:
+        description: "Comma-separated test paths (quick mode only, e.g. tests/ui/traits,tests/mir-opt)"
+        required: false
+        default: "tests/ui/async-await,tests/ui/coroutine,tests/ui/traits,tests/ui/closures,tests/ui/impl-trait"
   schedule:
-    # Run quick coverage weekly on Sunday at 02:00 UTC
+    # Run full coverage weekly on Sunday at 02:00 UTC
     - cron: "0 2 * * 0"
 
 jobs:
   coverage:
-    name: Compiler coverage (${{ github.event.inputs.mode || 'quick' }} mode)
+    name: Compiler coverage (${{ github.event.inputs.mode || 'full' }} mode)
     runs-on: ubuntu-latest
     # ubuntu-latest: 4 CPUs, 16GB RAM, ~84GB disk — sufficient for quick mode.
     # For full mode, consider a larger runner.
@@ -114,7 +118,8 @@ jobs:
 
       - name: Run coverage pipeline
         env:
-          COVERAGE_MODE: ${{ github.event.inputs.mode || 'quick' }}
+          COVERAGE_MODE: ${{ github.event.inputs.mode || 'full' }}
+          COVERAGE_SUITES: ${{ github.event.inputs.suites || '' }}
         run: bash coverage/run_coverage.sh
 
       - name: Post markdown summary
@@ -127,14 +132,14 @@ jobs:
       - name: Upload coverage JSON
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-json-${{ github.event.inputs.mode || 'quick' }}
+          name: coverage-json-${{ github.event.inputs.mode || 'full' }}
           path: coverage/out-compiler/coverage.json
           retention-days: 14
 
       - name: Upload merged profdata
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-profdata-${{ github.event.inputs.mode || 'quick' }}
+          name: coverage-profdata-${{ github.event.inputs.mode || 'full' }}
           path: coverage/out-compiler/merged.profdata
           retention-days: 14
 
