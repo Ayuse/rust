@@ -1349,7 +1349,7 @@ impl<'test> TestCx<'test> {
         // Set COMPILETEST_LLVM_PROFILE_DIR to a directory path to collect profraw files
         // from every rustc invocation with the correct flags, editions, and revisions.
         if let Ok(profile_dir) = std::env::var("COMPILETEST_LLVM_PROFILE_DIR") {
-            rustc.env("LLVM_PROFILE_FILE", format!("{}/rustc-%p.profraw", profile_dir));
+            rustc.env("LLVM_PROFILE_FILE", format!("{}/rustc-%m.profraw", profile_dir));
         }
 
         self.compose_and_run(
