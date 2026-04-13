@@ -122,9 +122,23 @@ jobs:
           COVERAGE_SUITES: ${{ github.event.inputs.suites || '' }}
         run: bash coverage/run_coverage.sh
 
+      - name: Try downloading previous coverage JSON as baseline
+        id: baseline
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: coverage-json-${{ github.event.inputs.mode || 'full' }}
+          path: coverage/baseline/
+
       - name: Post markdown summary
         run: |
-          python3 coverage/analyze.py coverage/out-compiler/coverage.json --format md \
+          BASELINE_FLAG=""
+          if [ -f coverage/baseline/coverage.json ]; then
+            BASELINE_FLAG="--baseline coverage/baseline/coverage.json"
+            echo "Baseline found — will show delta"
+          fi
+          python3 coverage/analyze.py coverage/out-compiler/coverage.json \
+            --format md --git-enrich $BASELINE_FLAG \
             >> "$GITHUB_STEP_SUMMARY"
 
       # Upload only JSON + profdata — HTML is ~425MB and exceeds free plan artifact limits.
