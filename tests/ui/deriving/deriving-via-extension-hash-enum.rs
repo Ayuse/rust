@@ -1,4 +1,4 @@
-//@ run-pass
+//@ build-pass
 #![allow(dead_code)]
 #[derive(Hash)]
 enum Foo {

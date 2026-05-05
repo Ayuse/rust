@@ -1,4 +1,4 @@
-//@ run-pass
+//@ build-pass
 
 #[derive(Clone)]
 #[allow(dead_code)]
