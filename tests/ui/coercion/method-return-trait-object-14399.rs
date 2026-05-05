@@ -1,6 +1,6 @@
 //! Regression test for https://github.com/rust-lang/rust/issues/14399
 
-//@ run-pass
+//@ check-pass
 // #14399
 // We'd previously ICE if we had a method call whose return
 // value was coerced to a trait object. (v.clone() returns Box<B1>

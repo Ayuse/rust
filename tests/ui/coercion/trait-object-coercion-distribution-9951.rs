@@ -1,5 +1,5 @@
 // https://github.com/rust-lang/rust/issues/9951
-//@ run-pass
+//@ check-pass
 
 #![allow(unused_variables)]
 
