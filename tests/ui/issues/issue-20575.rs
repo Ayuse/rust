@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 // Test that overloaded calls work with zero arity closures
 
 
