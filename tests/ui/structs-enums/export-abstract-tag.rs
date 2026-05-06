@@ -1,4 +1,4 @@
-//@ run-pass
+//@ check-pass
 #![allow(non_camel_case_types)]
 
 // We can export tags without exporting the variants to create a simple
