@@ -55,6 +55,7 @@ impl AbiMap {
             } else {
                 ArmVer::Other
             }),
+            Arch::Wasm32 | Arch::Wasm64 => ArchKind::Wasm,
             Arch::Avr => ArchKind::Avr,
             Arch::LoongArch32 | Arch::LoongArch64 => ArchKind::LoongArch,
             Arch::Msp430 => ArchKind::Msp430,
@@ -144,6 +145,11 @@ impl AbiMap {
                 return AbiMapping::Invalid;
             }
 
+            /* wasm */
+            // Maps to C for now; step 3 (codegen) will emit canonical lift/lower instead.
+            (ExternAbi::Wasm, ArchKind::Wasm) => CanonAbi::C,
+            (ExternAbi::Wasm, _) => return AbiMapping::Invalid,
+
             /* gpu */
             (ExternAbi::PtxKernel, ArchKind::Nvptx) => CanonAbi::GpuKernel,
             (ExternAbi::GpuKernel, ArchKind::Amdgpu | ArchKind::Nvptx) => CanonAbi::GpuKernel,
@@ -221,6 +227,7 @@ enum ArchKind {
     Riscv,
     X86,
     X86_64,
+    Wasm,
     /// Architectures which don't need other considerations for ABI lowering
     Other,
 }

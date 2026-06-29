@@ -669,6 +669,26 @@ fn fn_abi_adjust_for_abi<'tcx>(
         for arg in fn_abi.args.iter_mut() {
             unadjust(arg);
         }
+    } else if abi == ExternAbi::Wasm {
+        // Component Model Canonical ABI for wasm32/wasm64: run the wasm C-ABI,
+        // then flatten `ScalarPair` arguments to a pair of core values.
+        fn_abi.adjust_for_foreign_abi(cx, abi);
+
+        // The canonical ABI flattens a `(ptr, len)` record (`&str`, `&[T]`, a
+        // two-field record) into two core values, but the C-ABI classifier
+        // passes any `ScalarPair` behind a single indirect pointer. Force
+        // `PassMode::Pair`; empty attrs since the pair carries no aliasing
+        // guarantees across the boundary.
+        for arg in fn_abi.args.iter_mut() {
+            if matches!(arg.layout.backend_repr, BackendRepr::ScalarPair(..)) {
+                arg.mode = PassMode::Pair(ArgAttributes::new(), ArgAttributes::new());
+            }
+        }
+
+        // Returns are left as wasm C-ABI sret. Canonical results flatten to at
+        // most one core value (MAX_FLAT_RESULTS = 1), so a string/record result
+        // must travel through a return-area pointer passed *last* + cabi_realloc
+        // — a codegen change (codegen_ssa/llvm) tracked as the next step.
     } else if abi.is_rustic_abi() {
         fn_abi.adjust_for_rust_abi(cx);
     } else {

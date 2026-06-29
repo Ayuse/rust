@@ -1208,6 +1208,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 ReprAttr::ReprSimd => {
                     is_simd = true;
                 }
+                ReprAttr::ReprWasm => {}
                 ReprAttr::ReprTransparent => {
                     is_transparent = true;
                 }
