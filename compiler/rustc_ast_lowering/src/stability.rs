@@ -106,6 +106,9 @@ pub fn extern_abi_stability(abi: ExternAbi) -> Result<(), UnstableAbi> {
         ExternAbi::RustInvalid => {
             Err(UnstableAbi { abi, feature: sym::rustc_attrs, explain: GateReason::ImplDetail })
         }
+        ExternAbi::Wasm => {
+            Err(UnstableAbi { abi, feature: sym::abi_wasm, explain: GateReason::Experimental })
+        }
         ExternAbi::GpuKernel => Err(UnstableAbi {
             abi,
             feature: sym::abi_gpu_kernel,

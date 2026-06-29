@@ -178,6 +178,8 @@ pub enum ReprAttr {
     ReprC,
     ReprPacked(Align),
     ReprSimd,
+    /// Component Model record type — requires `#![feature(repr_wasm)]`.
+    ReprWasm,
     ReprTransparent,
     ReprAlign(Align),
 }

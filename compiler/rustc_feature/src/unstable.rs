@@ -334,6 +334,8 @@ declare_features! (
     (internal, pattern_types, "1.79.0", Some(123646)),
     /// Allows `repr(simd)` and importing the various simd intrinsics.
     (internal, repr_simd, "1.4.0", Some(27731)),
+    /// Allows `#[repr(wasm)]` on a struct — Component Model record type (experimental).
+    (unstable, repr_wasm, "CURRENT_RUSTC_VERSION", Some(656)),
     /// Allows using compiler's own crates.
     (unstable, rustc_private, "1.0.0", Some(27812)),
     /// Allows using internal rustdoc features like `doc(keyword)`.
@@ -382,6 +384,8 @@ declare_features! (
     (unstable, abi_riscv_interrupt, "1.73.0", Some(111889)),
     /// Allows `extern "Swift" fn()`.
     (unstable, abi_swift, "1.97.0", Some(156481)),
+    /// Allows `extern "wasm" fn()` — Component Model Canonical ABI (experimental).
+    (unstable, abi_wasm, "CURRENT_RUSTC_VERSION", Some(656)),
     /// Allows `extern "x86-interrupt" fn()`.
     (unstable, abi_x86_interrupt, "1.17.0", Some(40180)),
     /// Allows additional const parameter types, such as `[u8; 10]` or user defined types

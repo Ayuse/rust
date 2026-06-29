@@ -81,6 +81,12 @@ pub enum ExternAbi {
     /// extremely constrained barely-C ABI for TrustZone
     CmseNonSecureEntry,
 
+    /* wasm */
+    /// Component Model Canonical ABI — imports/exports a component function.
+    /// Requires `#![feature(abi_wasm)]`. Only valid on `wasm32`/`wasm64` targets.
+    /// This is the frontend token; codegen lift/lower is not yet implemented.
+    Wasm,
+
     /* gpu */
     /// An entry-point function called by the GPU's host
     GpuKernel,
@@ -195,6 +201,7 @@ abi_impls! {
             EfiApi =><= "efiapi",
             Fastcall { unwind: false } =><= "fastcall",
             Fastcall { unwind: true } =><= "fastcall-unwind",
+            Wasm =><= "wasm",
             GpuKernel =><= "gpu-kernel",
             Msp430Interrupt =><= "msp430-interrupt",
             PtxKernel =><= "ptx-kernel",
@@ -339,6 +346,7 @@ impl ExternAbi {
                 // See https://godbolt.org/z/jq5TE5jK1.
                 false
             }
+            Self::Wasm => false,
             Self::Custom => {
                 // This ABI does not support calls at all (except via assembly).
                 false

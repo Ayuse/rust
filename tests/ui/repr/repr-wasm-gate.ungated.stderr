@@ -1,0 +1,13 @@
+error[E0658]: `#[repr(wasm)]` is experimental
+  --> $DIR/repr-wasm-gate.rs:11:1
+   |
+LL | #[repr(wasm)]
+   | ^^^^^^^^^^^^^
+   |
+   = note: see issue #656 <https://github.com/rust-lang/rust/issues/656> for more information
+   = help: add `#![feature(repr_wasm)]` to the crate attributes to enable
+   = note: this compiler was built on YYYY-MM-DD; consider upgrading it if it is out of date
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0658`.

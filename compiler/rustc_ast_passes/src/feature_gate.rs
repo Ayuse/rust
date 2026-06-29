@@ -199,6 +199,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                                 "SIMD types are experimental and possibly buggy"
                             );
                         }
+                        if item.has_name(sym::wasm) {
+                            gate!(self, repr_wasm, attr.span, "`#[repr(wasm)]` is experimental");
+                        }
                     }
                 }
             }

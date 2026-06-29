@@ -1,0 +1,52 @@
+error[E0570]: "wasm" is not a supported ABI for the current target
+  --> $DIR/extern-wasm-gate.rs:19:8
+   |
+LL | extern "wasm" fn f1() {}
+   |        ^^^^^^
+
+error[E0658]: the extern "wasm" ABI is experimental and subject to change
+  --> $DIR/extern-wasm-gate.rs:19:8
+   |
+LL | extern "wasm" fn f1() {}
+   |        ^^^^^^
+   |
+   = note: see issue #656 <https://github.com/rust-lang/rust/issues/656> for more information
+   = help: add `#![feature(abi_wasm)]` to the crate attributes to enable
+   = note: this compiler was built on YYYY-MM-DD; consider upgrading it if it is out of date
+
+error[E0570]: "wasm" is not a supported ABI for the current target
+  --> $DIR/extern-wasm-gate.rs:23:18
+   |
+LL | type A1 = extern "wasm" fn();
+   |                  ^^^^^^
+
+error[E0658]: the extern "wasm" ABI is experimental and subject to change
+  --> $DIR/extern-wasm-gate.rs:23:18
+   |
+LL | type A1 = extern "wasm" fn();
+   |                  ^^^^^^
+   |
+   = note: see issue #656 <https://github.com/rust-lang/rust/issues/656> for more information
+   = help: add `#![feature(abi_wasm)]` to the crate attributes to enable
+   = note: this compiler was built on YYYY-MM-DD; consider upgrading it if it is out of date
+
+error[E0570]: "wasm" is not a supported ABI for the current target
+  --> $DIR/extern-wasm-gate.rs:27:8
+   |
+LL | extern "wasm" {}
+   |        ^^^^^^
+
+error[E0658]: the extern "wasm" ABI is experimental and subject to change
+  --> $DIR/extern-wasm-gate.rs:27:8
+   |
+LL | extern "wasm" {}
+   |        ^^^^^^
+   |
+   = note: see issue #656 <https://github.com/rust-lang/rust/issues/656> for more information
+   = help: add `#![feature(abi_wasm)]` to the crate attributes to enable
+   = note: this compiler was built on YYYY-MM-DD; consider upgrading it if it is out of date
+
+error: aborting due to 6 previous errors
+
+Some errors have detailed explanations: E0570, E0658.
+For more information about an error, try `rustc --explain E0570`.
