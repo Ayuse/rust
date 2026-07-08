@@ -637,6 +637,7 @@ fn fn_abi_new_uncached<'tcx>(
             determined_fn_def_id,
             sig.abi(),
         ),
+        ret_area_last: false,
     };
     fn_abi_adjust_for_abi(cx, &mut fn_abi, sig.abi());
     debug!("fn_abi_new_uncached = {:?}", fn_abi);
@@ -685,10 +686,17 @@ fn fn_abi_adjust_for_abi<'tcx>(
             }
         }
 
-        // Returns are left as wasm C-ABI sret. Canonical results flatten to at
-        // most one core value (MAX_FLAT_RESULTS = 1), so a string/record result
-        // must travel through a return-area pointer passed *last* + cabi_realloc
-        // — a codegen change (codegen_ssa/llvm) tracked as the next step.
+        // Canonical results flatten to at most one core value
+        // (MAX_FLAT_RESULTS = 1), so a string/record result that the wasm C-ABI
+        // classified as an indirect sret must travel through a return-area
+        // pointer passed *last* (not first, as the C sret convention places it).
+        // Flag it here; the LLVM backend honors `ret_area_last` when laying out
+        // the function type and applying the sret attribute.
+        //
+        // Still TODO for a full canonical return: allocate the returned bytes via
+        // `cabi_realloc` and have the caller reconstruct `(ptr, len)` from the
+        // return area.
+        fn_abi.ret_area_last = true;
     } else if abi.is_rustic_abi() {
         fn_abi.adjust_for_rust_abi(cx);
     } else {

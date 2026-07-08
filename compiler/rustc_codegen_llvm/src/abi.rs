@@ -368,7 +368,12 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
             PassMode::Direct(_) | PassMode::Pair(..) => self.ret.layout.immediate_llvm_type(cx),
             PassMode::Cast { cast, pad_i32: _ } => cast.llvm_type(cx),
             PassMode::Indirect { .. } => {
-                llargument_tys.push(cx.type_ptr());
+                // The return-area pointer is normally the first argument. The
+                // Component Model Canonical ABI (`extern "wasm"`) instead appends
+                // it after the flattened parameters — see `ret_area_last` below.
+                if !self.ret_area_last {
+                    llargument_tys.push(cx.type_ptr());
+                }
                 cx.type_void()
             }
         };
@@ -416,6 +421,13 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
                 }
             };
             llargument_tys.push(llarg_ty);
+        }
+
+        // Canonical-ABI return area: the sret pointer is appended after all
+        // parameters instead of prepended. Keep this in sync with the argument
+        // indexing in `rustc_codegen_ssa` and the sret attribute placement below.
+        if self.ret_area_last && matches!(self.ret.mode, PassMode::Indirect { .. }) {
+            llargument_tys.push(cx.type_ptr());
         }
 
         if self.c_variadic {
@@ -467,6 +479,28 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
             i - 1
         };
 
+        // Apply the `sret` (and, when optimizing, `writable`/`dead_on_unwind`)
+        // attributes to the return-area pointer at argument index `i`. Factored
+        // out so it can run either at index 0 (normal sret-first convention) or
+        // after the parameters (the `ret_area_last` canonical-ABI convention).
+        let apply_sret_attrs = |i: u32| {
+            let sret = llvm::CreateStructRetAttr(
+                cx.llcx,
+                cx.type_array(cx.type_i8(), self.ret.layout.size.bytes()),
+            );
+            attributes::apply_to_llfn(llfn, llvm::AttributePlace::Argument(i), &[sret]);
+            if cx.sess().opts.optimize != config::OptLevel::No {
+                attributes::apply_to_llfn(
+                    llfn,
+                    llvm::AttributePlace::Argument(i),
+                    &[
+                        llvm::AttributeKind::Writable.create_attr(cx.llcx),
+                        llvm::AttributeKind::DeadOnUnwind.create_attr(cx.llcx),
+                    ],
+                );
+            }
+        };
+
         let apply_range_attr = |idx: AttributePlace, scalar: rustc_abi::Scalar| {
             if cx.sess().opts.optimize != config::OptLevel::No
                 && matches!(scalar.primitive(), Primitive::Int(..))
@@ -494,21 +528,11 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
             }
             PassMode::Indirect { attrs, meta_attrs: _, on_stack } => {
                 assert!(!on_stack);
-                let i = apply(attrs);
-                let sret = llvm::CreateStructRetAttr(
-                    cx.llcx,
-                    cx.type_array(cx.type_i8(), self.ret.layout.size.bytes()),
-                );
-                attributes::apply_to_llfn(llfn, llvm::AttributePlace::Argument(i), &[sret]);
-                if cx.sess().opts.optimize != config::OptLevel::No {
-                    attributes::apply_to_llfn(
-                        llfn,
-                        llvm::AttributePlace::Argument(i),
-                        &[
-                            llvm::AttributeKind::Writable.create_attr(cx.llcx),
-                            llvm::AttributeKind::DeadOnUnwind.create_attr(cx.llcx),
-                        ],
-                    );
+                // For the canonical ABI the return-area pointer is the *last*
+                // argument, so its attributes are applied after the loop below.
+                if !self.ret_area_last {
+                    let i = apply(attrs);
+                    apply_sret_attrs(i);
                 }
             }
             PassMode::Cast { cast, pad_i32: _ } => {
@@ -587,6 +611,16 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
             }
         }
 
+        // Canonical ABI: the return-area pointer trails the parameters, so apply
+        // its `sret` attributes now that `i` has advanced past every argument.
+        if self.ret_area_last
+            && let PassMode::Indirect { attrs, on_stack, .. } = &self.ret.mode
+        {
+            assert!(!on_stack);
+            let i = apply(attrs);
+            apply_sret_attrs(i);
+        }
+
         // If the declaration has an associated instance, compute extra attributes based on that.
         if let Some(instance) = instance {
             llfn_attrs_from_instance(
@@ -615,18 +649,28 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
             i += 1;
             i - 1
         };
+
+        // Apply the `sret` attribute to the return-area pointer at argument index
+        // `i`; deferred past the parameters for the `ret_area_last` canonical ABI.
+        let apply_sret_attr = |cx: &CodegenCx<'_, '_>, i: u32| {
+            let sret = llvm::CreateStructRetAttr(
+                cx.llcx,
+                cx.type_array(cx.type_i8(), self.ret.layout.size.bytes()),
+            );
+            attributes::apply_to_callsite(callsite, llvm::AttributePlace::Argument(i), &[sret]);
+        };
+
         match &self.ret.mode {
             PassMode::Direct(attrs) => {
                 attrs.apply_attrs_to_callsite(llvm::AttributePlace::ReturnValue, bx.cx, callsite);
             }
             PassMode::Indirect { attrs, meta_attrs: _, on_stack } => {
                 assert!(!on_stack);
-                let i = apply(bx.cx, attrs);
-                let sret = llvm::CreateStructRetAttr(
-                    bx.cx.llcx,
-                    bx.cx.type_array(bx.cx.type_i8(), self.ret.layout.size.bytes()),
-                );
-                attributes::apply_to_callsite(callsite, llvm::AttributePlace::Argument(i), &[sret]);
+                // Canonical ABI applies this after the parameters; see below.
+                if !self.ret_area_last {
+                    let i = apply(bx.cx, attrs);
+                    apply_sret_attr(bx.cx, i);
+                }
             }
             PassMode::Cast { cast, pad_i32: _ } => {
                 cast.attrs.apply_attrs_to_callsite(
@@ -671,6 +715,15 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
                     apply(bx.cx, &cast.attrs);
                 }
             }
+        }
+
+        // Canonical ABI: the return-area pointer trails the parameters.
+        if self.ret_area_last
+            && let PassMode::Indirect { attrs, on_stack, .. } = &self.ret.mode
+        {
+            assert!(!on_stack);
+            let i = apply(bx.cx, attrs);
+            apply_sret_attr(bx.cx, i);
         }
 
         let cconv = self.llvm_cconv(&bx.cx);

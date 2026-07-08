@@ -280,7 +280,7 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 
     // Allocate variable and temp allocas
     let local_values = {
-        let args = arg_local_refs(&mut start_bx, &mut fx, &memory_locals);
+        let (args, ret_area_param_idx) = arg_local_refs(&mut start_bx, &mut fx, &memory_locals);
 
         let mut allocate_local = |local: Local| {
             let decl = &mir.local_decls[local];
@@ -291,7 +291,10 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
                 match fx.fn_abi.ret.mode {
                     PassMode::Indirect { .. } => {
                         debug!("alloc: {:?} (return place) -> place", local);
-                        let llretptr = start_bx.get_param(0);
+                        // The return-area pointer is the first argument, except
+                        // under the canonical ABI where it trails the parameters.
+                        let idx = if fx.fn_abi.ret_area_last { ret_area_param_idx } else { 0 };
+                        let llretptr = start_bx.get_param(idx);
                         return LocalRef::Place(PlaceRef::new_sized(llretptr, layout));
                     }
                     PassMode::Cast { ref cast, .. } => {
@@ -410,20 +413,29 @@ fn optimize_use_clone<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 /// Produces, for each argument, a `Value` pointing at the
 /// argument's value. As arguments are places, these are always
 /// indirect.
+///
+/// Also returns the trailing LLVM argument index reached after all parameters.
+/// For the canonical ABI (`ret_area_last`) the return-area pointer is not the
+/// first argument, so `llarg_idx` starts at 0 and this trailing value is the
+/// index of that pointer (used to fetch the return place; see `codegen_mir`).
 fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     bx: &mut Bx,
     fx: &mut FunctionCx<'a, 'tcx, Bx>,
     memory_locals: &DenseBitSet<mir::Local>,
-) -> Vec<LocalRef<'tcx, Bx::Value>> {
+) -> (Vec<LocalRef<'tcx, Bx::Value>>, usize) {
     let mir = fx.mir;
     let mut idx = 0;
-    let mut llarg_idx = fx.fn_abi.ret.is_indirect() as usize;
+    // The return-area pointer is normally the first LLVM argument, offsetting the
+    // parameters by one. Under the canonical ABI it trails the parameters instead,
+    // so the parameters start at index 0.
+    let mut llarg_idx =
+        (fx.fn_abi.ret.is_indirect() && !fx.fn_abi.ret_area_last) as usize;
 
     let mut num_untupled = None;
 
     let codegen_fn_attrs = bx.tcx().codegen_instance_attrs(fx.instance.def);
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
-        return vec![];
+        return (vec![], llarg_idx);
     }
 
     let mut args = mir
@@ -616,9 +628,12 @@ fn arg_local_refs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
             layout: arg.layout,
             move_annotation: None,
         });
+        // Count the location param so the trailing index below points past it
+        // (the canonical return-area pointer, if any, follows all parameters).
+        llarg_idx += 1;
     }
 
-    args
+    (args, llarg_idx)
 }
 
 fn find_cold_blocks<'tcx>(

@@ -1180,17 +1180,36 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
 
         let mut llargs = Vec::with_capacity(arg_count);
 
+        // For the canonical ABI (`ret_area_last`) the return-area pointer is the
+        // *last* argument. `make_return_dest` stashes it here instead of pushing it
+        // to `llargs` up front; it is appended after the parameters, below.
+        let mut deferred_ret_area_ptr: Option<Bx::Value> = None;
+
         // We still need to call `make_return_dest` even if there's no `target`, since
         // `fn_abi.ret` could be `PassMode::Indirect`, even if it is uninhabited,
         // and `make_return_dest` adds the return-place indirect pointer to `llargs`.
         let destination = match kind {
             CallKind::Normal => {
-                let return_dest = self.make_return_dest(bx, destination, &fn_abi.ret, &mut llargs);
+                let return_dest = self.make_return_dest(
+                    bx,
+                    destination,
+                    &fn_abi.ret,
+                    &mut llargs,
+                    fn_abi.ret_area_last,
+                    &mut deferred_ret_area_ptr,
+                );
                 target.map(|target| (return_dest, target))
             }
             CallKind::Tail => {
                 if fn_abi.ret.is_indirect() {
-                    match self.make_return_dest(bx, destination, &fn_abi.ret, &mut llargs) {
+                    match self.make_return_dest(
+                        bx,
+                        destination,
+                        &fn_abi.ret,
+                        &mut llargs,
+                        fn_abi.ret_area_last,
+                        &mut deferred_ret_area_ptr,
+                    ) {
                         ReturnDest::Nothing => {}
                         _ => bug!(
                             "tail calls to functions with indirect returns cannot store into a destination"
@@ -1407,6 +1426,12 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 last_arg,
                 &mut lifetime_ends_after_call,
             );
+        }
+
+        // Canonical ABI: the return-area pointer trails all parameters (including
+        // any `#[track_caller]` location argument appended just above).
+        if let Some(ret_area_ptr) = deferred_ret_area_ptr {
+            llargs.push(ret_area_ptr);
         }
 
         let fn_ptr = match (instance, llfn) {
@@ -2215,7 +2240,19 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         dest: mir::Place<'tcx>,
         fn_ret: &ArgAbi<'tcx, Ty<'tcx>>,
         llargs: &mut Vec<Bx::Value>,
+        ret_area_last: bool,
+        deferred_ret_area_ptr: &mut Option<Bx::Value>,
     ) -> ReturnDest<'tcx, Bx::Value> {
+        // The return-area pointer is normally prepended to `llargs`. Under the
+        // canonical ABI (`ret_area_last`) it must instead be the last argument, so
+        // stash it for the caller to append after the parameters.
+        let mut push_ret_area_ptr = |llval| {
+            if ret_area_last {
+                *deferred_ret_area_ptr = Some(llval);
+            } else {
+                llargs.push(llval);
+            }
+        };
         // If the return is ignored, we can just return a do-nothing `ReturnDest`.
         if fn_ret.is_ignore() {
             return ReturnDest::Nothing;
@@ -2232,7 +2269,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                         // but the calling convention has an indirect return.
                         let tmp = PlaceRef::alloca(bx, fn_ret.layout);
                         tmp.storage_live(bx);
-                        llargs.push(tmp.val.llval);
+                        push_ret_area_ptr(tmp.val.llval);
                         ReturnDest::IndirectOperand(tmp, index)
                     } else {
                         ReturnDest::DirectOperand(index)
@@ -2255,7 +2292,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 // to create a temporary.
                 span_bug!(self.mir.span, "can't directly store to unaligned value");
             }
-            llargs.push(dest.val.llval);
+            push_ret_area_ptr(dest.val.llval);
             ReturnDest::Nothing
         } else {
             ReturnDest::Store(dest)

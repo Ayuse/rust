@@ -620,12 +620,19 @@ pub struct FnAbi<'a, Ty> {
     pub conv: CanonAbi,
     /// Indicates if an unwind may happen across a call to this function.
     pub can_unwind: bool,
+
+    /// For an indirect (sret) return, place the return-area pointer as the
+    /// *last* argument rather than the first. The Component Model Canonical ABI
+    /// (`extern "wasm"`) requires this: results flatten to at most one core
+    /// value, so a larger result travels through a return-area pointer appended
+    /// after the flattened parameters. Only honored by the LLVM backend for now.
+    pub ret_area_last: bool,
 }
 
 // Needs to be a custom impl because of the bounds on the `TyAndLayout` debug impl.
 impl<'a, Ty: fmt::Display> fmt::Debug for FnAbi<'a, Ty> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let FnAbi { args, ret, c_variadic, fixed_count, conv, can_unwind } = self;
+        let FnAbi { args, ret, c_variadic, fixed_count, conv, can_unwind, ret_area_last } = self;
         f.debug_struct("FnAbi")
             .field("args", args)
             .field("ret", ret)
@@ -633,6 +640,7 @@ impl<'a, Ty: fmt::Display> fmt::Debug for FnAbi<'a, Ty> {
             .field("fixed_count", fixed_count)
             .field("conv", conv)
             .field("can_unwind", can_unwind)
+            .field("ret_area_last", ret_area_last)
             .finish()
     }
 }
@@ -932,6 +940,6 @@ mod size_asserts {
     use super::*;
     // tidy-alphabetical-start
     static_assert_size!(ArgAbi<'_, usize>, 56);
-    static_assert_size!(FnAbi<'_, usize>, 80);
+    static_assert_size!(FnAbi<'_, usize>, 88);
     // tidy-alphabetical-end
 }

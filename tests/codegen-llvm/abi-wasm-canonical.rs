@@ -1,7 +1,7 @@
 // `extern "wasm"` (Component Model Canonical ABI) lowering, spike in progress:
-// arguments are flattened to core values (canonical), but returns are still the
-// wasm C-ABI sret (return pointer first, not the canonical return-area-last).
-// The CHECK lines record the current state so a future return fix trips them.
+// arguments are flattened to core values, and a multi-value result travels
+// through a return-area pointer passed as the *last* argument (canonical),
+// rather than the wasm C-ABI's return-pointer-first sret convention.
 
 //@ add-minicore
 //@ compile-flags: --target wasm32-unknown-unknown -C no-prepopulate-passes
@@ -32,10 +32,12 @@ pub extern "wasm" fn pair_arg(_x: (i32, i32)) {}
 #[no_mangle]
 pub extern "wasm" fn str_arg(_s: &str) {}
 
-// `&str` return: currently sret with the return pointer FIRST, followed by the
-// flattened `(ptr, len)` argument. Canonical ABI wants the return pointer LAST
-// (see file header) — recorded here as the known-divergent current state.
-// CHECK: define {{.*}}void @str_ret(ptr {{.*}}sret{{.*}}, ptr {{.*}}, i32 {{.*}})
+// `&str` return: a two-value result cannot be returned directly (the canonical
+// ABI allows at most one core result value), so it travels through a return-area
+// pointer. That pointer is the *last* argument, after the flattened `(ptr, len)`
+// argument — the canonical return-area-last convention (not sret-first). The
+// callee writes the returned `(ptr, len)` into that trailing return area.
+// CHECK: define {{.*}}void @str_ret(ptr {{.*}}, i32 {{.*}}, ptr {{.*}}sret{{.*}})
 #[no_mangle]
 pub extern "wasm" fn str_ret(s: &str) -> &str {
     s
